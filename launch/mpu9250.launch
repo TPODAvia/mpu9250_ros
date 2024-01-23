@@ -1,0 +1,3 @@
+<launch>
+    <node name="mpu_node" pkg="mpu9250_ros" type="mpu_node.py" output="screen"/>
+</launch>
