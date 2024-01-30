@@ -67,8 +67,8 @@ class Madgwick:
 		self.yaw = np.degrees(np.arctan2(2*q[1]*q[2] + 2*q[0]*q[3],\
 							 q[0]*q[0] + q[1]*q[1] - q[2]*q[2] -q[3]*q[3]))
 		self.pitch = np.degrees(-1*np.arcsin(2*(q[1]*q[3] - q[0]*q[2])))
-		self.roll = np.degrees(np.arctan2(2*q[0]*q[1] + 2*q[2]*q[3],\
-								q[0]*q[0] + q[3]*q[3] - q[1]*q[1] - q[2]*q[2]))
+		self.roll = np.degrees((np.arctan2(2*q[0]*q[1] + 2*q[2]*q[3],\
+								q[0]*q[0] + q[3]*q[3] - q[1]*q[1] - q[2]*q[2])))
 
 	def constrainAngle360(slef, dta):
 

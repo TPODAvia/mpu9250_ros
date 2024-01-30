@@ -4,7 +4,7 @@ import time
 import smbus
 import json
 
-sys.path.append("/home/jetson/catkin_ws/src/OrcaRL/sensors/mpu9250_ros/src/")
+sys.path.append("/home/rover/gr_platform/ros/src/sensing/mpu9250_ros/src/")
 from imusensor.MPU9250 import MPU9250
 from imusensor.filters import madgwick
 
@@ -18,7 +18,7 @@ imu.begin()
 # imu.caliberateGyro()
 # imu.caliberateAccelerometer()
 # or load your own caliberation file
-imu.loadCalibDataFromFile("/home/jetson/catkin_ws/src/OrcaRL/sensors/mpu9250_ros/config/calib.json")
+imu.loadCalibDataFromFile("/home/rover/gr_platform/ros/src/sensing/mpu9250_ros/config/calib.json")
 
 currTime = time.time()
 print_count = 0
@@ -48,7 +48,7 @@ while True:
 
 			if angle > 3:
 				# data = {yaw_data}
-				with open('/home/jetson/catkin_ws/src/OrcaRL/sensors/mpu9250_ros/config/yaw_calib.json', 'w') as f:
+				with open('/home/rover/gr_platform/ros/src/sensing/mpu9250_ros/config/yaw_calib.json', 'w') as f:
 					json.dump(yaw_data, f)
 					print("json saved")
 				angle = 0
