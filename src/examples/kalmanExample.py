@@ -17,7 +17,7 @@ imu.begin()
 # imu.caliberateMag()
 # print ("Mag calib successful")
 # or load your calibration file
-imu.loadCalibDataFromFile("/home/jetson/catkin_ws/src/OrcaRL/sensors/mpu9250_ros/config/parameters.json")
+# imu.loadCalibDataFromFile("/home/jetson/catkin_ws/src/OrcaRL/sensors/mpu9250_ros/config/parameters.json")
 
 sensorfusion = kalman.Kalman()
 

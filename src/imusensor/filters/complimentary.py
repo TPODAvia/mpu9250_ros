@@ -17,6 +17,8 @@ class Complimentary():
 		self.pitch = 0
 		self.yaw = 0
 		self.gain = gain
+		self.counterRoll = 0
+		self.counterPitch = 0
 
 	def setRoll(self, roll):
 		self.roll = roll
@@ -36,10 +38,25 @@ class Complimentary():
 
 
 	def updateRollAndPitch(self, measuredRoll, measuredPitch, gx, gy, dt):
+
+		if measuredRoll < -160 or measuredRoll > 160:
+			self.roll = measuredRoll
+			self.counterRoll = 0
+		if self.counterRoll < 20:
+			self.roll = measuredRoll
+
+		if measuredPitch < -160 or measuredPitch > 160:
+			self.pitch = measuredPitch
+			self.counterPitch = 0
+		if self.counterPitch < 20:
+			self.roll = measuredRoll
+
+		self.counterRoll +=1
+		self.counterPitch += 1
 		self.roll = self.update(self.roll, measuredRoll, gx, dt)
 		self.pitch = self.update(self.pitch, measuredPitch, gy, dt)
 
 	def update(self, angle, measuredAngle, angularVelocity, dt):
 
-		newAngle = (angle + angularVelocity*dt)*(1 - self.gain)  + self.gain*(measuredAngle)
+		newAngle = (angle + 50*angularVelocity*dt)*(1 - self.gain)  + self.gain*(measuredAngle)
 		return newAngle

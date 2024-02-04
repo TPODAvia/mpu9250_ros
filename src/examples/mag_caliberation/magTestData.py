@@ -30,7 +30,7 @@ imu.begin()
 # print (imu.MagBias)
 # print (imu.Magtransform)
 # print (imu.Mags)
-imu.saveCalibDataToFile("/home/jetson/catkin_ws/src/OrcaRL/sensors/imusensor/parameter.json")
+imu.loadCalibDataFromFile("/home/jetson/catkin_ws/src/OrcaRL/sensors/mpu9250_ros/config/calib.json")
 
 while True:
 	imu.readSensor()
