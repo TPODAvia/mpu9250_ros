@@ -176,7 +176,7 @@ class Madgwick:
 
 		deltaF = self.normalizeq(np.squeeze(np.matmul(accelJacob.T, accelF)))
 
-		self.q = self.q + (qDot - self.beta*deltaF)*dt
+		self.q = self.q + 4*(qDot - 0.6*deltaF)*dt
 		self.q = self.normalizeq(self.q)
 		self.computeOrientation(self.q)
 

@@ -22,11 +22,11 @@ class Speed_Estimation:
 		self.velocityZ = 0
 
 		# Threshold for number of samples after which device is considered stationary
-		self.STATIC_SAMPLES_THRESHOLD = 6
+		self.STATIC_SAMPLES_THRESHOLD = 10
 		# Threshold value for acceleration after which device is considered stationary
-		self.STATIC_ACCELERATION_THRESHOLD = 0.35
+		self.STATIC_ACCELERATION_THRESHOLD = 0.26
 		# Threshold value for angular velocity after which device is considered stationary
-		self.STATIC_ANGULAR_VELOCITY_THRESHOLD = 0.35
+		self.STATIC_ANGULAR_VELOCITY_THRESHOLD = 0.15
 
 		self.intX = Integral()
 		self.intY = Integral()
@@ -40,6 +40,7 @@ class Speed_Estimation:
 		self.previousState = True
 		self.last_compensatedGravity = [0,0,0]
 		self.now_compensatedGravity = [0,0,0]
+		self.timer = 0
 
 	def estimate_velocity(self, time_now, time_previous, ax, ay, az, wx, wy, wz, q):
 
@@ -48,46 +49,65 @@ class Speed_Estimation:
 			self.first = False
 
 		# if (time_now - self.firstControlNr) > 5 :
-		if True:
+			
+		self.now_compensatedGravity = self.compensate_gravity([ax, ay, az], q)
+		# print(self.zeroVelocityUpdate(self.last_compensatedGravity, [wx, wy, wz]))
+		# print(self.now_compensatedGravity)
+		# Detecting static state
 
-			self.now_compensatedGravity = self.compensate_gravity([ax, ay, az], q)
+		if self.zeroVelocityUpdate(self.now_compensatedGravity, [wx, wy, wz]):
 
-			# Detecting static state
-			if self.zeroVelocityUpdate(self.last_compensatedGravity, [wx, wy, wz]):
+			self.velocityX = self.intX.integrate(time_previous, time_now, self.last_compensatedGravity[0], self.now_compensatedGravity[0])
+			self.velocityY = self.intY.integrate(time_previous, time_now, self.last_compensatedGravity[1], self.now_compensatedGravity[1])
+			self.velocityZ = self.intZ.integrate(time_previous, time_now, self.last_compensatedGravity[2], self.now_compensatedGravity[2])
 
-				self.velocityX = self.intX.integrate(time_previous, time_now, self.last_compensatedGravity[0], self.now_compensatedGravity[0])
-				self.velocityY = self.intY.integrate(time_previous, time_now, self.last_compensatedGravity[1], self.now_compensatedGravity[1])
-				self.velocityZ = self.intZ.integrate(time_previous, time_now, self.last_compensatedGravity[2], self.now_compensatedGravity[2])
+			# Add velocity and time at the moment of movement start
+			if not self.previousState:
+				# self.changeStateTimes* = [[1, 2] <-- [3, 4]] becoming [[3, 4], [5, 6]]
+				self.changeStateTimesX = [ [self.changeStateTimesX[1][0], self.changeStateTimesX[1][1]], \
+											[time_previous,                  self.velocityX] ]
+				
+				self.changeStateTimesY = [ [self.changeStateTimesY[1][0], self.changeStateTimesY[1][1]], \
+											[time_previous,                  self.velocityY] ]
+				
+				self.changeStateTimesZ = [ [self.changeStateTimesZ[1][0], self.changeStateTimesZ[1][1]], \
+											[time_previous,                  self.velocityZ] ]
+				self.timer = 0
+			self.previousState = True
 
-				# Add velocity and time at the moment of movement start
-				if not self.previousState:
-					# self.changeStateTimes* = [[1, 2] <-- [3, 4]] becoming [[3, 4], [5, 6]]
-					self.changeStateTimesX = [ [self.changeStateTimesX[1][0], self.changeStateTimesX[1][1]], \
-							                   [time_previous,                  self.velocityX] ]
-					
-					self.changeStateTimesY = [ [self.changeStateTimesY[1][0], self.changeStateTimesY[1][1]], \
-							                   [time_previous,                  self.velocityY] ]
-					
-					self.changeStateTimesZ = [ [self.changeStateTimesZ[1][0], self.changeStateTimesZ[1][1]], \
-							                   [time_previous,                  self.velocityZ] ]
-				self.previousState = True
+			if self.timer > 50:
 
-			else:
-				self.velocityX = self.intX.integrate(time_previous, time_now, self.last_compensatedGravity[0], self.now_compensatedGravity[0])
-				self.velocityY = self.intY.integrate(time_previous, time_now, self.last_compensatedGravity[1], self.now_compensatedGravity[1])
-				self.velocityZ = self.intZ.integrate(time_previous, time_now, self.last_compensatedGravity[2], self.now_compensatedGravity[2])
+				self.changeStateTimesX = [ [self.changeStateTimesX[1][0], self.changeStateTimesX[1][1]], \
+											[time_previous,                  self.velocityX] ]
+				
+				self.changeStateTimesY = [ [self.changeStateTimesY[1][0], self.changeStateTimesY[1][1]], \
+											[time_previous,                  self.velocityY] ]
+				
+				self.changeStateTimesZ = [ [self.changeStateTimesZ[1][0], self.changeStateTimesZ[1][1]], \
+											[time_previous,                  self.velocityZ] ]
 
-				# Add velocity and time at the moment of movement end
-				if self.previousState:
-					self.changeStateTimesX = [ [self.changeStateTimesX[1][0], self.changeStateTimesX[1][1]], \
-							                   [time_previous,                  self.velocityX] ]
-					
-					self.changeStateTimesY = [ [self.changeStateTimesY[1][0], self.changeStateTimesY[1][1]], \
-							                   [time_previous,                  self.velocityY] ]
-					
-					self.changeStateTimesZ = [ [self.changeStateTimesZ[1][0], self.changeStateTimesZ[1][1]], \
-							                   [time_previous,                  self.velocityZ] ]
-				self.previousState = False
+				self.timer = 0
+
+		else:
+			self.velocityX = self.intX.integrate(time_previous, time_now, self.last_compensatedGravity[0], self.now_compensatedGravity[0])
+			self.velocityY = self.intY.integrate(time_previous, time_now, self.last_compensatedGravity[1], self.now_compensatedGravity[1])
+			self.velocityZ = self.intZ.integrate(time_previous, time_now, self.last_compensatedGravity[2], self.now_compensatedGravity[2])
+
+			# Add velocity and time at the moment of movement end
+			if self.previousState:
+				self.changeStateTimesX = [ [self.changeStateTimesX[1][0], self.changeStateTimesX[1][1]], \
+											[time_previous,                  self.velocityX] ]
+				
+				self.changeStateTimesY = [ [self.changeStateTimesY[1][0], self.changeStateTimesY[1][1]], \
+											[time_previous,                  self.velocityY] ]
+				
+				self.changeStateTimesZ = [ [self.changeStateTimesZ[1][0], self.changeStateTimesZ[1][1]], \
+											[time_previous,                  self.velocityZ] ]
+				self.timer = 0
+			self.previousState = False
+
+
+		self.timer = self.timer + 1		
 
 		# Gravity Compensation in the past
 		self.last_compensatedGravity = self.now_compensatedGravity
@@ -102,7 +122,7 @@ class Speed_Estimation:
 		# 	self.changeStateTimesZ.append((time_previous, self.velocityZ))
 			
 		# return [self.velocityX, self.velocityY, self.velocityZ]
-		print(self.now_compensatedGravity[0])
+		# print(self.velocityZ)
 		return self.compensate_velocity_and_compute_displacement(self.velocityX, self.velocityY, self.velocityZ, time_now)
 
 	def compensate_velocity_and_compute_displacement(self, velocityX, velocityY, velocityZ, time_now):
@@ -137,10 +157,28 @@ class Speed_Estimation:
 
 	def compensate_gravity(self, acc, q):
 		g = [0]*3
-		g[0] = 2 * (q[1] * q[3] - q[0] * q[2]) * self.GRAVITY
-		g[1] = 2 * (q[0] * q[1] + q[2] * q[3]) * self.GRAVITY
-		g[2] = (q[0] * q[0] - q[1] * q[1] - q[2] * q[2] + q[3] * q[3]) * self.GRAVITY
+		# print(f"{q[1] * q[3]} :::::::::: {q[0] * q[2]}")
+		g[0] = 2 * (q[1]*q[3] - q[0]*q[2]) * self.GRAVITY
+		g[1] = 2 * (q[0]*q[1] + q[2]*q[3]) * self.GRAVITY
+		g[2] = (q[0]*q[0] - q[1]*q[1] - q[2]*q[2] + q[3]*q[3]) * self.GRAVITY
+		# print(g[2])
 		return [acc[0] - g[0], acc[1] - g[1], acc[2] - g[2]]
+		# if acc[2] > 0:
+		# 	return [acc[0] - g[0], acc[1] - g[1], acc[2] - g[2]]
+		# else:
+		# 	return [acc[0] - g[0], acc[1] + g[1], acc[2] + g[2]]
+
+	# def compensate_gravity(self, acc, q):
+	# 	g = [0]*3
+	# 	# print(f"{q[1] * q[3]} :::::::::: {q[0] * q[2]}")
+	# 	g[0] = 2 * (q[1]*q[3] - q[0]*q[2]) * self.GRAVITY
+	# 	g[1] = 2 * (q[0]*q[1] + q[2]*q[3]) * self.GRAVITY
+	# 	g[2] = (q[0]*q[0] - q[1]*q[1] - q[2]*q[2] + q[3]*q[3]) * self.GRAVITY
+	# 	# print(g[2])
+	# 	if acc[2] > 0:
+	# 		return [acc[0] + g[0], acc[1] - g[1], acc[2] - g[2]]
+	# 	else:
+	# 		return [acc[0] + g[0], acc[1] + g[1], acc[2] + g[2]]
 
 	def linear_function(self, x, y, value):
 
