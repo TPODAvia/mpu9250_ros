@@ -5,7 +5,6 @@ import smbus
 import json
 import math
 import numpy as np
-from scipy.linalg import norm
 
 sys.path.append("/home/jetson/catkin_ws/src/OrcaRL/sensors/mpu9250_ros/src")
 from imusensor.MPU9250 import MPU9250
@@ -46,40 +45,36 @@ yaw_compensate = False
 IMU_Norm = [0, 0, 0]
 NorthVector = [0,0,0]
 
-def find_orthogonal(vector):
-    # Normalize the input vector
-    normalized = vector / norm(vector)
+def calculate_pitch_and_roll(accel_vals):
+    IMU_Norm = accel_vals * (1/9.8)
     
-    # Create two potential orthogonal vectors
-    u = np.array([normalized[1], -normalized[0]])
-    v = np.array([-normalized[2], 0, normalized[0]])
-    
-    # Choose the one with the largest magnitude
-    if norm(u) > norm(v):
-        return u / norm(u)
+    if accel_vals[2] <  0:
+        pitch = math.atan(IMU_Norm[0] / math.sqrt(IMU_Norm[1]**2 + IMU_Norm[2]**2))
+        if pitch >  0:
+            pitch =  3.1 - pitch
+        else:
+            pitch = -3.14 - pitch
+        roll = math.atan(IMU_Norm[1] / math.sqrt(IMU_Norm[0]**2 + IMU_Norm[2]**2))
+        if roll >  0:
+            roll =  3.1 - roll
+        else:
+            roll = -3.14 - roll
     else:
-        return v / norm(v)
-	
-def project_to_plane(input_vector, orthogonal_vector):
-    # Find the projection matrix
-    P = np.eye(3) - np.outer(orthogonal_vector, orthogonal_vector)
+        pitch = math.atan(IMU_Norm[0] / math.sqrt(IMU_Norm[1]**2 + IMU_Norm[2]**2))
+        roll = math.atan(IMU_Norm[1] / math.sqrt(IMU_Norm[0]**2 + IMU_Norm[2]**2))
+
+    # Convert from radians to degrees
+    pitch = math.degrees(pitch)
+    roll = math.degrees(roll)
     
-    # Project the input vector onto the plane
-    projected_vector = P @ input_vector
-    
-    return projected_vector[:2] # Return only the first two components
+    return pitch, roll
 
 def quaternion_to_euler(q):
 
-	x = q[0]
-	y = q[1]
-	z = q[2]
-	w = q[3]
-
-	# x = q[3]
-	# y = q[0]
-	# z = q[1]
-	# w = q[2]
+	x = q[1]
+	y = q[2]
+	z = q[3]
+	w = q[0]
 
 	t0 = +2.0 * (w * x + y * z)
 	t1 = +1.0 - 2.0 * (x * x + y * y)
@@ -111,21 +106,6 @@ def euler_to_quaternion(roll, pitch, yaw):
 
     return [w, x, y, z]
 
-def calculate_north_vector(magnetometer_data):
-    # Convert the magnetometer data to radians
-    x = magnetometer_data[0]
-    y = magnetometer_data[1]
-
-    # Calculate the North vector
-    magnitude = math.sqrt(x**2 + y**2)
-    angle = math.atan2(y, x)
-
-    return [magnitude * math.cos(angle), magnitude * math.sin(angle), 0.0]
-
-mag = [0,0,0]
-
-slow_vec = [0,0]
-
 def normalize_angles(roll, pitch, yaw):
     # Convert degrees to radians
     roll = math.radians(roll)
@@ -139,27 +119,50 @@ def normalize_angles(roll, pitch, yaw):
     
     return [norm_roll, norm_pitch, norm_yaw]
 
-def magToHeading2(magnetic):
-    heading = -1
-    if magnetic[1] > 0:
-        heading = 90-math.atan(magnetic[0]/magnetic[1]) * 180 / math.pi
-    elif magnetic[1] < 0:
-        heading = -90-math.atan(magnetic[0]/magnetic[1]) * 180 / math.pi
-    elif magnetic[1] == 0:
-        if magnetic[0] < 0:
-            heading = 180.0
-        else:
-            heading = 0.0
-    return round(heading,3)
+def calculate_ned_frame(magnetic_field_vector, gravity_vector):
+    # Normalize the gravity vector to get the downward direction
+    down_vector = gravity_vector / np.linalg.norm(gravity_vector)
 
-def quaternion_multiply(q1, q2):
-    w1, x1, y1, z1 = q1
-    w2, x2, y2, z2 = q2
-    w = w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2
-    x = w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2
-    y = w1 * y2 + y1 * w2 + z1 * x2 - x1 * z2
-    z = w1 * z2 + z1 * w2 + x1 * y2 - y1 * x2
-    return [x, y, z, w]
+    # Normalize the magnetic field vector to get the magnetic north direction
+    north_vector = magnetic_field_vector / np.linalg.norm(magnetic_field_vector)
+
+    # Calculate the east vector as the cross product of down and north
+    east_vector = np.cross(down_vector, north_vector)
+
+    # Recompute the north vector as the cross product of east and down
+    # to ensure it's perpendicular to both
+    north_vector = np.cross(east_vector, down_vector)
+
+    return [down_vector, north_vector, east_vector]
+
+
+def calculate_quaternion_from_coordinates(initial_vector, ortogonal_vector1, ortogonal_vector2):
+    
+    desired_vector = [ortogonal_vector1[0]+ortogonal_vector2[1],ortogonal_vector1[1]-ortogonal_vector2[0],0]
+    
+    # Normalize the initial and final vectors
+    initial_norm = initial_vector / np.linalg.norm(initial_vector)
+    final_norm = desired_vector / np.linalg.norm(desired_vector)
+    
+    # print(final_norm)
+    
+    # Calculate the halfway vector
+    halfway = final_norm + initial_norm
+    
+    # Normalize the halfway vector
+    halfway_norm = halfway / np.linalg.norm(halfway)
+    
+    # Compute the quaternion components
+    w = np.dot(initial_norm, halfway_norm)
+    x = initial_norm[1]*halfway_norm[2] - initial_norm[2]*halfway_norm[1]
+    y = initial_norm[2]*halfway_norm[0] - initial_norm[0]*halfway_norm[2]
+    z = initial_norm[0]*halfway_norm[1] - initial_norm[1]*halfway_norm[0]
+    
+    # Return the quaternion
+    return [w, x, y, z]
+
+def estimage_gravity(acceleration, gyroscope):
+     
 
 while True:
 	imu.readSensor()
@@ -167,126 +170,23 @@ while True:
 		newTime = time.time()
 		dt = newTime - currTime
 		currTime = newTime
-
-		# sensorfusion.updateRollPitchYaw(imu.AccelVals[0], imu.AccelVals[1], imu.AccelVals[2], imu.GyroVals[0], \
-		# 							imu.GyroVals[1], imu.GyroVals[2], imu.MagVals[0], imu.MagVals[1], imu.MagVals[2], dt)
-
-		# IMU_Norm = imu.AccelVals * 1/9.8
-		
-		# if imu.AccelVals[2] < 0:
-		# 	pitch = math.atan(IMU_Norm[0] / math.sqrt(IMU_Norm[1]**2 + IMU_Norm[2]**2))
-		# 	if pitch > 0:
-		# 		pitch = 3.1 - pitch
-		# 	else:
-		# 		pitch = -3.14 - pitch
-		# 	roll = math.atan(IMU_Norm[1] / math.sqrt(IMU_Norm[0]**2 + IMU_Norm[2]**2))
-		# 	if roll > 0:
-		# 		roll = 3.1 - roll
-		# 	else:
-		# 		roll = -3.14 - roll
-		# else:
-		# 	pitch = math.atan(IMU_Norm[0] / math.sqrt(IMU_Norm[1]**2 + IMU_Norm[2]**2))
-		# 	roll = math.atan(IMU_Norm[1] / math.sqrt(IMU_Norm[0]**2 + IMU_Norm[2]**2))
-
-		# # Convert from radians to degrees
-		# pitch = math.degrees(pitch)
-		# roll = math.degrees(roll)
-
-		# compl_filter.updateRollAndPitch(roll, pitch, imu.GyroVals[0], -imu.GyroVals[1], dt)
-            
-		# roll_rad = math.radians(compl_filter.roll)
-		# pitch_rad = math.radians(compl_filter.pitch)
-		# yaw_rad = math.radians(0)
-
-		# norm_angle = normalize_angles(compl_filter.roll, compl_filter.pitch, 0)
-		# print(round(compl_filter.roll, 0))
-		# print(round(compl_filter.pitch, 0))
-		# print(round(imu.GyroVals[0], 3))
-			
-		# NorthVector = calculate_north_vector([imu.MagVals[0], imu.MagVals[1], imu.MagVals[2]])
-		# print ("mad roll: {0} ; mad pitch : {1} ; mad yaw : {2}".format(imu.MagVals[0], imu.MagVals[1], imu.MagVals[2]))
-
-		result_x = imu.MagVals[0]#/mag[0]
-		result_y = imu.MagVals[1]#/mag[1]
-		result_z = imu.MagVals[2]#/mag[2]
-            
-		h = math.sqrt(result_x * result_x + result_y * result_y + result_z * result_z)
-
-		result_x /= h
-		result_y /= h
-		result_z /= h
-
-		# Compute Euler angles
-		# yaw_rad = math.atan2(-result_y, result_x)
-            
-		vec3d = np.array([result_x, -result_y, result_z])
-
-		# Find a vector orthogonal to vec3d
-		# orthogonal_vec = find_orthogonal(vec3d)
+          
+		g_force = estimage_gravity([imu.AccelVals[0], imu.AccelVals[1], imu.AccelVals[2]], [imu.GyroVals[0], imu.GyroVals[1], imu.GyroVals[2]])
 
 		# Project vec3d onto the plane orthogonal to orthogonal_vec
+		projected_vec = calculate_ned_frame([imu.MagVals[0], imu.MagVals[1], imu.MagVals[2]], [g_force[0], g_force[1], g_force[2]])
         
-
-		projected_vec = project_to_plane(vec3d, np.array([-imu.AccelVals[0]/9.8, -imu.AccelVals[1]/9.8, -imu.AccelVals[2]/9.8]))
-
-		slow_vec[0] = 0.5*projected_vec[0] + (1 - 0.5)*slow_vec[0]
-		slow_vec[1] = 0.5*projected_vec[1] + (1 - 0.5)*slow_vec[1]
-
-		yaw_rad = math.radians(magToHeading2(slow_vec))
-		# print(f"Original 3D Vector: {vec3d}")
-		# print(f"Orthogonal Vector: {norm_angle}")
-        
-		# print(f"Projected 2D Vector: {round(projected_vec[0],0)} {round(projected_vec[1],0)}")
-
-		# print ("mad roll: {0} ; mad pitch : {1} ; mad yaw : {2}".format(round(result_x,1), round(result_y,1), round(result_z,1)))
-
-		# sensorfusion.updateRollPitchYaw(imu.AccelVals[0], imu.AccelVals[1], imu.AccelVals[2], imu.GyroVals[0], imu.GyroVals[1], imu.GyroVals[2], imu.MagVals[0], imu.MagVals[1], imu.MagVals[2], dt)
-		sensorfusion.updateRollAndPitch(imu.AccelVals[0], imu.AccelVals[1], imu.AccelVals[2], imu.GyroVals[0], imu.GyroVals[1], imu.GyroVals[2], dt)
-		# print ("mad roll: {0} ; mad pitch : {1} ; mad yaw : {2}".format( sensorfusion.roll,  sensorfusion.pitch,  sensorfusion.yaw))
-        
-		# print ("111 roll: {0} ; 111 pitch : {1} ; 111 yaw : {2}".format( roll_rad,  pitch_rad,  yaw_rad))
-		# print(magToHeading2(slow_vec))
+		yaw_quaternion = calculate_quaternion_from_coordinates([1,0,0], projected_vec[1], projected_vec[2])
           
-		# time.sleep(0.1) sensorfusion.q
+		yaw_euler = quaternion_to_euler(yaw_quaternion)
 
-		comp_vel = speed_est.estimate_velocity(newTime, newTime-dt, imu.AccelVals[0], imu.AccelVals[1], imu.AccelVals[2], imu.GyroVals[0], \
-									imu.GyroVals[1], imu.GyroVals[2], sensorfusion.q )
+		sensorfusion.updateRollAndPitch(g_force[0], g_force[1], g_force[2], imu.GyroVals[0], imu.GyroVals[1], imu.GyroVals[2], dt)
 
-		quaternion_y = euler_to_quaternion(0, 0, 0)
+		comp_vel = speed_est.estimate_velocity(newTime, newTime-dt, g_force[0], g_force[1], g_force[2], imu.GyroVals[0], imu.GyroVals[1], imu.GyroVals[2], sensorfusion.q)
           
-		combined_quaternion = quaternion_multiply(sensorfusion.q, quaternion_y)
-		# comp_vel = speed_est.estimate_velocity(newTime, newTime-dt, imu.AccelVals[0], imu.AccelVals[1], imu.AccelVals[2], imu.GyroVals[0], \
-		# 							imu.GyroVals[1], imu.GyroVals[2], sensorfusion.normalizeq(euler_to_quaternion(roll_rad, pitch_rad, yaw_rad)) )
-
-		# ox, oy, oz = quaternion_to_euler(sensorfusion.q[1], sensorfusion.q[2], sensorfusion.q[3], sensorfusion.q[0])
-		# print ("mad roll: {0} ; mad pitch : {1} ; mad yaw : {2}".format( round(vx, 6),  round(vy, 6),  round(vz, 6)))
-
+		quaternion_y = euler_to_quaternion(math.radians(sensorfusion.roll), math.radians(sensorfusion.pitch), math.radians(yaw_euler[2]))
+          
 	if print_count == 20:
-          
-		print(quaternion_to_euler(sensorfusion.q))
-		# print(f"Projected 2D Vector: {round(slow_vec[0],2)} {round(slow_vec[1],2)}")
-		# print(magToHeading2(slow_vec))
-		# print(f"Projected 2D Vector: {round(roll_rad,2)} {round(pitch_rad,2)} {round(yaw_rad,2)}")   
-		# print(imu.AccelVals)
-		# print(round(comp_vel[0], 2), round(comp_vel[1], 2), round(comp_vel[2], 2))
-		# if yaw_compensate:
-		# 	if (sensorfusion.yaw > -abs(data[0]) and sensorfusion.yaw < data[1]): 	# 0->90
-		# 				yaw_est = lookup(sensorfusion.yaw,-abs(data[0]),data[1],0,90)
-
-		# 	if (sensorfusion.yaw > data[1] and sensorfusion.yaw < data[2]): 		# 90->180
-		# 				yaw_est = lookup(sensorfusion.yaw,data[1],data[2],90,180)
-
-		# 	if (sensorfusion.yaw > data[2] and sensorfusion.yaw < data[3]): 		# 180->270
-		# 				yaw_est = lookup(sensorfusion.yaw,data[2],data[3],180,270)
-
-		# 	if (sensorfusion.yaw > data[3] and sensorfusion.yaw < 180):				# 270->360
-		# 				yaw_est = lookup(sensorfusion.yaw,data[3],abs(data[0]),270,360)
-						
-		# 	print ("mad roll: {0} ; mad pitch : {1} ; mad yaw : {2}".format(round(rotate_angle(sensorfusion.roll), 0), round(sensorfusion.pitch - 32, 0), round(yaw_est, 0)))
-		# else:
-		# 	print ("mad roll: {0} ; mad pitch : {1} ; mad yaw : {2}".format(round(rotate_angle(sensorfusion.roll), 0), round(sensorfusion.pitch - 32 , 0), round(sensorfusion.yaw, 0)))
-		
-		# print ("mad roll: {0} ; mad pitch : {1} ; mad yaw : {2}".format(vx, vy, vz))
 		print_count = 0
 
 	print_count = print_count + 1
