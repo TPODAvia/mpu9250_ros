@@ -6,7 +6,9 @@ import math
 from imusensor.MPU9250 import MPU9250
 from imusensor.filters import madgwick
 from sensor_msgs.msg import Imu
+from geometry_msgs.msg import Twist
 from geometry_msgs.msg import TransformStamped
+from imusensor.filters import speed_estimation
 
 import math
 import tf.transformations
@@ -25,12 +27,17 @@ imu.setGyroRange("GyroRangeSelect1000DPS")
 imu.setLowPassFilterFrequency("AccelLowPassFilter5")
 imu.loadCalibDataFromFile("/home/jetson/catkin_ws/src/OrcaRL/sensors/mpu9250_ros/config/calib.json")
 
+speed_est = speed_estimation.Speed_Estimation()
+
 with open('/home/jetson/catkin_ws/src/OrcaRL/sensors/mpu9250_ros/config/yaw_calib.json', 'r') as f:
     data = json.load(f)
 
 # Initialize the filter
 sensorfusion = madgwick.Madgwick(0.5)
 slow_vec = [0,0]
+alpha = 0.001
+acc_est = [0,0,0]
+
 # Shint in counteclockwise by 44 degrees
 def rotate_angle(angle):
     shifted_angle = (angle + 44) % 360
@@ -144,8 +151,80 @@ def calculate_quaternion_from_coordinates(initial_vector, ortogonal_vector1, ort
     # Return the quaternion
     return [w, x, y, z]
 
+def estimage_gravity(accel, gyro, dt):
+
+    a_norm_abs = abs(accel / np.linalg.norm(accel))
+
+    if accel[0] > 0:
+        k0 = 1
+    else:
+        k0 = -1
+
+    if accel[1] > 0:
+        k1 = 1
+    else:
+        k1 = -1
+
+    if accel[2] > 0:
+        k2 = 1
+    else:
+        k2 = -1
+    
+    # x: 1 (1->1) + 0 (0->1)
+    # z: 0 (1->0) + 1 (1->1)
+    # acc_est[0] = (acc_est[0] - 8* (gyro[1]*k2*(1-a_norm_abs[1]) + gyro[2]*k1*(1-a_norm_abs[2])) *dt )*(1-alpha) + alpha * accel[0]
+    # acc_est[1] = (acc_est[1] + 8* (gyro[0]*k2*(1-a_norm_abs[0]) + gyro[2]*k0*(1-a_norm_abs[2])) *dt )*(1-alpha) + alpha * accel[1]
+    # acc_est[2] = (acc_est[2] + 8* (gyro[0]*k1*(1-a_norm_abs[0]) + gyro[1]*k0*(1-a_norm_abs[1])) *dt )*(1-alpha) + alpha * accel[2]
+
+
+    acc_est[0] = accel[0]
+    acc_est[1] = accel[1]
+    acc_est[2] = accel[2]
+    # print(accel_norm)
+
+    return acc_est
+
+yaw_est = [0,1,0]
+hysteresis_threshold =  270  # Define a threshold for the hysteresis
+def estimage_yaw(yaw, gyro_z, dt):
+
+    yaw_est[0] = (yaw_est[0] - 70* gyro_z *dt )*(1-0.05) + 0.05 * yaw
+
+    # Hysteresis correction
+    if abs(yaw - yaw_est[0]) > hysteresis_threshold:
+        if yaw_est[1] == 1:
+            yaw_est[1] == 0
+            yaw_est[0] = yaw
+
+        # Correct the yaw estimation if the difference exceeds the threshold
+        if yaw >  0 and yaw_est[0] < -160:
+                yaw_est[0] +=  360
+        elif yaw <  0 and yaw_est[0] >  160:
+                yaw_est[0] -=  360
+
+    if abs(yaw - yaw_est[0]) > 180:
+        yaw_est[2] += 1
+        if yaw_est[2] > 2:
+            yaw_est[2] = 0
+            yaw_est[0] = yaw
+    else:
+        yaw_est[2] = 0
+
+    # print(f"{yaw_est} {yaw}")
+
+    if yaw_est[0] > 180:
+        return 180
+    elif yaw_est[0] < -180:
+        return -180
+    else:
+        return yaw_est[0]
+
+
 def talker():
+
     pub = rospy.Publisher('/mpu9250_ros/imu_data', Imu, queue_size=10)
+    vel_pub = rospy.Publisher('/mpu9250_ros/imu_data', Twist, queue_size=10)
+
     rospy.init_node('imu_publisher', anonymous=True)
     rate = rospy.Rate(100)  # 100hz
     currTime = rospy.get_time()
@@ -160,6 +239,9 @@ def talker():
         dt = newTime - currTime
         currTime = newTime
 
+        # g_force = estimage_gravity([imu.AccelVals[0], imu.AccelVals[1], imu.AccelVals[2]], [imu.GyroVals[0], imu.GyroVals[1], imu.GyroVals[2]])
+
+        # Project vec3d onto the plane orthogonal to orthogonal_vec
         projected_vec = calculate_ned_frame([imu.MagVals[0], imu.MagVals[1], imu.MagVals[2]], [imu.AccelVals[0], imu.AccelVals[1], imu.AccelVals[2]])
         
         yaw_quaternion = calculate_quaternion_from_coordinates([1,0,0], projected_vec[1], projected_vec[2])
@@ -168,10 +250,16 @@ def talker():
 
         sensorfusion.updateRollAndPitch(imu.AccelVals[0], imu.AccelVals[1], imu.AccelVals[2], imu.GyroVals[0], imu.GyroVals[1], imu.GyroVals[2], dt)
 
-        # comp_vel = speed_est.estimate_velocity(newTime, newTime-dt, imu.AccelVals[0], imu.AccelVals[1], imu.AccelVals[2], imu.GyroVals[0], \
-        #                         	imu.GyroVals[1], imu.GyroVals[2], sensorfusion.q )
+        comp_vel = speed_est.estimate_velocity(newTime, newTime-dt, imu.AccelVals[0], imu.AccelVals[1], imu.AccelVals[2], imu.GyroVals[0], imu.GyroVals[1], imu.GyroVals[2], sensorfusion.q)
           
-        quaternion_y = euler_to_quaternion(math.radians(sensorfusion.roll), math.radians(sensorfusion.pitch), math.radians(yaw_euler[2]))
+        est_yaw = estimage_yaw(yaw_euler[2], imu.GyroVals[2], dt)
+        quaternion_y = euler_to_quaternion(math.radians(sensorfusion.roll), math.radians(sensorfusion.pitch), math.radians(est_yaw))
+
+        velo_msg = Twist()
+        velo_msg.linear.x = comp_vel[0]
+        velo_msg.linear.y = comp_vel[1]
+        velo_msg.linear.z = comp_vel[2]
+        vel_pub.publish(velo_msg)
 
         # Create IMU message
         imu_msg = Imu()

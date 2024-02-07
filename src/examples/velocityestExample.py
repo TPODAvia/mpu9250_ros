@@ -29,45 +29,42 @@ imu.loadCalibDataFromFile("/home/jetson/catkin_ws/src/OrcaRL/sensors/mpu9250_ros
 with open('/home/jetson/catkin_ws/src/OrcaRL/sensors/mpu9250_ros/config/yaw_calib.json', 'r') as f:
     data = json.load(f)
 
-def lookup(x, old_min, old_max, new_min, new_max):
-    return ((new_max - new_min) * (x - old_min) / (old_max - old_min)) + new_min
-
-# Shint in counteclockwise by 44 degrees
-def rotate_angle(angle):
-    shifted_angle = (angle + 134) % 360
-    if shifted_angle > 180:
-        shifted_angle -= 360
-    return shifted_angle
-
 currTime = time.time()
 print_count = 0
 yaw_compensate = False
 IMU_Norm = [0, 0, 0]
-NorthVector = [0,0,0]
 
-def calculate_pitch_and_roll(accel_vals):
-    IMU_Norm = accel_vals * (1/9.8)
-    
-    if accel_vals[2] <  0:
-        pitch = math.atan(IMU_Norm[0] / math.sqrt(IMU_Norm[1]**2 + IMU_Norm[2]**2))
-        if pitch >  0:
-            pitch =  3.1 - pitch
-        else:
-            pitch = -3.14 - pitch
-        roll = math.atan(IMU_Norm[1] / math.sqrt(IMU_Norm[0]**2 + IMU_Norm[2]**2))
-        if roll >  0:
-            roll =  3.1 - roll
-        else:
-            roll = -3.14 - roll
-    else:
-        pitch = math.atan(IMU_Norm[0] / math.sqrt(IMU_Norm[1]**2 + IMU_Norm[2]**2))
-        roll = math.atan(IMU_Norm[1] / math.sqrt(IMU_Norm[0]**2 + IMU_Norm[2]**2))
+# # Shift in counteclockwise by 44 degrees
+# def rotate_angle(angle):
+#     shifted_angle = (angle + 134) % 360
+#     if shifted_angle > 180:
+# 		shifted_angle -= 360
+#     return shifted_angle
 
-    # Convert from radians to degrees
-    pitch = math.degrees(pitch)
-    roll = math.degrees(roll)
+
+# def calculate_pitch_and_roll(accel_vals):
+#     IMU_Norm = accel_vals * (1/9.8)
     
-    return pitch, roll
+#     if accel_vals[2] <  0:
+# 		pitch = math.atan(IMU_Norm[0] / math.sqrt(IMU_Norm[1]**2 + IMU_Norm[2]**2))
+# 		if pitch >  0:
+# 		    pitch =  3.1 - pitch
+# 		else:
+# 		    pitch = -3.14 - pitch
+# 		roll = math.atan(IMU_Norm[1] / math.sqrt(IMU_Norm[0]**2 + IMU_Norm[2]**2))
+# 		if roll >  0:
+# 		    roll =  3.1 - roll
+# 		else:
+# 		    roll = -3.14 - roll
+#     else:
+# 		pitch = math.atan(IMU_Norm[0] / math.sqrt(IMU_Norm[1]**2 + IMU_Norm[2]**2))
+# 		roll = math.atan(IMU_Norm[1] / math.sqrt(IMU_Norm[0]**2 + IMU_Norm[2]**2))
+
+#     # Convert from radians to degrees
+#     pitch = math.degrees(pitch)
+#     roll = math.degrees(roll)
+    
+#     return pitch, roll
 
 def quaternion_to_euler(q):
 
@@ -161,7 +158,40 @@ def calculate_quaternion_from_coordinates(initial_vector, ortogonal_vector1, ort
     # Return the quaternion
     return [w, x, y, z]
 
-def estimage_gravity(acceleration, gyroscope):
+yaw_est = [0,1,0]
+hysteresis_threshold =  270  # Define a threshold for the hysteresis
+def estimage_yaw(yaw, gyro_z, dt):
+
+    yaw_est[0] = (yaw_est[0] - 70* gyro_z *dt )*(1-0.05) + 0.05 * yaw
+
+    # Hysteresis correction
+    if abs(yaw - yaw_est[0]) > hysteresis_threshold:
+        if yaw_est[1] == 1:
+            yaw_est[1] == 0
+            yaw_est[0] = yaw
+
+        # Correct the yaw estimation if the difference exceeds the threshold
+        if yaw >  0 and yaw_est[0] < -160:
+                yaw_est[0] +=  360
+        elif yaw <  0 and yaw_est[0] >  160:
+                yaw_est[0] -=  360
+
+    if abs(yaw - yaw_est[0]) > 180:
+        yaw_est[2] += 1
+        if yaw_est[2] > 2:
+            yaw_est[2] = 0
+            yaw_est[0] = yaw
+    else:
+        yaw_est[2] = 0
+
+    # print(f"{yaw_est} {yaw}")
+
+    if yaw_est[0] > 180:
+        return 180
+    elif yaw_est[0] < -180:
+        return -180
+    else:
+        return yaw_est[0]
      
 
 while True:
@@ -170,22 +200,23 @@ while True:
 		newTime = time.time()
 		dt = newTime - currTime
 		currTime = newTime
-          
-		g_force = estimage_gravity([imu.AccelVals[0], imu.AccelVals[1], imu.AccelVals[2]], [imu.GyroVals[0], imu.GyroVals[1], imu.GyroVals[2]])
+		  
+		# g_force = estimage_gravity([imu.AccelVals[0], imu.AccelVals[1], imu.AccelVals[2]], [imu.GyroVals[0], imu.GyroVals[1], imu.GyroVals[2]])
 
 		# Project vec3d onto the plane orthogonal to orthogonal_vec
-		projected_vec = calculate_ned_frame([imu.MagVals[0], imu.MagVals[1], imu.MagVals[2]], [g_force[0], g_force[1], g_force[2]])
-        
+		projected_vec = calculate_ned_frame([imu.MagVals[0], imu.MagVals[1], imu.MagVals[2]], [imu.AccelVals[0], imu.AccelVals[1], imu.AccelVals[2]])
+		
 		yaw_quaternion = calculate_quaternion_from_coordinates([1,0,0], projected_vec[1], projected_vec[2])
-          
+		  
 		yaw_euler = quaternion_to_euler(yaw_quaternion)
 
-		sensorfusion.updateRollAndPitch(g_force[0], g_force[1], g_force[2], imu.GyroVals[0], imu.GyroVals[1], imu.GyroVals[2], dt)
+		sensorfusion.updateRollAndPitch(imu.AccelVals[0], imu.AccelVals[1], imu.AccelVals[2], imu.GyroVals[0], imu.GyroVals[1], imu.GyroVals[2], dt)
 
-		comp_vel = speed_est.estimate_velocity(newTime, newTime-dt, g_force[0], g_force[1], g_force[2], imu.GyroVals[0], imu.GyroVals[1], imu.GyroVals[2], sensorfusion.q)
-          
-		quaternion_y = euler_to_quaternion(math.radians(sensorfusion.roll), math.radians(sensorfusion.pitch), math.radians(yaw_euler[2]))
-          
+		comp_vel = speed_est.estimate_velocity(newTime, newTime-dt, imu.AccelVals[0], imu.AccelVals[1], imu.AccelVals[2], imu.GyroVals[0], imu.GyroVals[1], imu.GyroVals[2], sensorfusion.q)
+		  
+		est_yaw = estimage_yaw(yaw_euler[2], imu.GyroVals[2], dt)
+		quaternion_y = euler_to_quaternion(math.radians(sensorfusion.roll), math.radians(sensorfusion.pitch), math.radians(est_yaw))
+		  
 	if print_count == 20:
 		print_count = 0
 
