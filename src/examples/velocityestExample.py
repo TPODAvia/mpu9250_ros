@@ -218,6 +218,7 @@ while True:
 		quaternion_y = euler_to_quaternion(math.radians(sensorfusion.roll), math.radians(sensorfusion.pitch), math.radians(est_yaw))
 		  
 	if print_count == 20:
+		print(comp_vel)
 		print_count = 0
 
 	print_count = print_count + 1

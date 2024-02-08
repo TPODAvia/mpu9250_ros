@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
+import sys
 import rospy
 import smbus
-import time
 import math
 from imusensor.MPU9250 import MPU9250
 from imusensor.filters import madgwick
@@ -9,12 +9,14 @@ from sensor_msgs.msg import Imu
 from geometry_msgs.msg import Twist
 from geometry_msgs.msg import TransformStamped
 from imusensor.filters import speed_estimation
-
+import argparse
 import math
-import tf.transformations
 import tf2_ros
-import json
 import numpy as np
+
+parser = argparse.ArgumentParser(description='My ROS Node with Argparse')
+parser.add_argument('calib_file', type=str, default='~/catkin_ws/src/OrcaRL/sensors/mpu9250_ros/config/calib.json', help='Calibration file')
+args = parser.parse_args(rospy.myargv(argv=sys.argv)[1:])
 
 # Initialize the sensor
 yaw_compensate = True
@@ -25,18 +27,18 @@ imu.begin()
 imu.setAccelRange("AccelRangeSelect8G")
 imu.setGyroRange("GyroRangeSelect1000DPS")
 imu.setLowPassFilterFrequency("AccelLowPassFilter5")
-imu.loadCalibDataFromFile("/home/jetson/catkin_ws/src/OrcaRL/sensors/mpu9250_ros/config/calib.json")
+# imu.loadCalibDataFromFile("/home/jetson/catkin_ws/src/OrcaRL/sensors/mpu9250_ros/config/calib.json")
+imu.loadCalibDataFromFile(args.calib_file)
 
 speed_est = speed_estimation.Speed_Estimation()
-
-with open('/home/jetson/catkin_ws/src/OrcaRL/sensors/mpu9250_ros/config/yaw_calib.json', 'r') as f:
-    data = json.load(f)
 
 # Initialize the filter
 sensorfusion = madgwick.Madgwick(0.5)
 slow_vec = [0,0]
 alpha = 0.001
 acc_est = [0,0,0]
+yaw_est = [0,1,0]
+hysteresis_threshold =  270  # Define a threshold for the hysteresis
 
 # Shint in counteclockwise by 44 degrees
 def rotate_angle(angle):
@@ -134,8 +136,6 @@ def calculate_quaternion_from_coordinates(initial_vector, ortogonal_vector1, ort
     initial_norm = initial_vector / np.linalg.norm(initial_vector)
     final_norm = desired_vector / np.linalg.norm(desired_vector)
     
-    # print(final_norm)
-    
     # Calculate the halfway vector
     halfway = final_norm + initial_norm
     
@@ -172,20 +172,12 @@ def estimage_gravity(accel, gyro, dt):
     
     # x: 1 (1->1) + 0 (0->1)
     # z: 0 (1->0) + 1 (1->1)
-    # acc_est[0] = (acc_est[0] - 8* (gyro[1]*k2*(1-a_norm_abs[1]) + gyro[2]*k1*(1-a_norm_abs[2])) *dt )*(1-alpha) + alpha * accel[0]
-    # acc_est[1] = (acc_est[1] + 8* (gyro[0]*k2*(1-a_norm_abs[0]) + gyro[2]*k0*(1-a_norm_abs[2])) *dt )*(1-alpha) + alpha * accel[1]
-    # acc_est[2] = (acc_est[2] + 8* (gyro[0]*k1*(1-a_norm_abs[0]) + gyro[1]*k0*(1-a_norm_abs[1])) *dt )*(1-alpha) + alpha * accel[2]
-
-
-    acc_est[0] = accel[0]
-    acc_est[1] = accel[1]
-    acc_est[2] = accel[2]
-    # print(accel_norm)
+    acc_est[0] = (acc_est[0] - 8* (gyro[1]*k2*(1-a_norm_abs[1]) + gyro[2]*k1*(1-a_norm_abs[2])) *dt )*(1-alpha) + alpha * accel[0]
+    acc_est[1] = (acc_est[1] + 8* (gyro[0]*k2*(1-a_norm_abs[0]) + gyro[2]*k0*(1-a_norm_abs[2])) *dt )*(1-alpha) + alpha * accel[1]
+    acc_est[2] = (acc_est[2] + 8* (gyro[0]*k1*(1-a_norm_abs[0]) + gyro[1]*k0*(1-a_norm_abs[1])) *dt )*(1-alpha) + alpha * accel[2]
 
     return acc_est
 
-yaw_est = [0,1,0]
-hysteresis_threshold =  270  # Define a threshold for the hysteresis
 def estimage_yaw(yaw, gyro_z, dt):
 
     yaw_est[0] = (yaw_est[0] - 70* gyro_z *dt )*(1-0.05) + 0.05 * yaw
@@ -210,8 +202,6 @@ def estimage_yaw(yaw, gyro_z, dt):
     else:
         yaw_est[2] = 0
 
-    # print(f"{yaw_est} {yaw}")
-
     if yaw_est[0] > 180:
         return 180
     elif yaw_est[0] < -180:
@@ -223,10 +213,10 @@ def estimage_yaw(yaw, gyro_z, dt):
 def talker():
 
     pub = rospy.Publisher('/mpu9250_ros/imu_data', Imu, queue_size=10)
-    vel_pub = rospy.Publisher('/mpu9250_ros/imu_data', Twist, queue_size=10)
+    vel_pub = rospy.Publisher('/mpu9250_ros/imu_vel', Twist, queue_size=10)
 
     rospy.init_node('imu_publisher', anonymous=True)
-    rate = rospy.Rate(100)  # 100hz
+    rate = rospy.Rate(30)  # 30hz
     currTime = rospy.get_time()
     
     # Initialize tf broadcaster
@@ -234,34 +224,30 @@ def talker():
     
     while not rospy.is_shutdown():
         imu.readSensor()
-        imu.computeOrientation()
-        newTime = rospy.get_time()
-        dt = newTime - currTime
-        currTime = newTime
+        for i in range(10):
+            newTime = rospy.get_time()
+            dt = newTime - currTime
+            currTime = newTime
 
-        # g_force = estimage_gravity([imu.AccelVals[0], imu.AccelVals[1], imu.AccelVals[2]], [imu.GyroVals[0], imu.GyroVals[1], imu.GyroVals[2]])
-
-        # Project vec3d onto the plane orthogonal to orthogonal_vec
-        projected_vec = calculate_ned_frame([imu.MagVals[0], imu.MagVals[1], imu.MagVals[2]], [imu.AccelVals[0], imu.AccelVals[1], imu.AccelVals[2]])
-        
-        yaw_quaternion = calculate_quaternion_from_coordinates([1,0,0], projected_vec[1], projected_vec[2])
-          
-        yaw_euler = quaternion_to_euler(yaw_quaternion)
-
-        sensorfusion.updateRollAndPitch(imu.AccelVals[0], imu.AccelVals[1], imu.AccelVals[2], imu.GyroVals[0], imu.GyroVals[1], imu.GyroVals[2], dt)
-
-        comp_vel = speed_est.estimate_velocity(newTime, newTime-dt, imu.AccelVals[0], imu.AccelVals[1], imu.AccelVals[2], imu.GyroVals[0], imu.GyroVals[1], imu.GyroVals[2], sensorfusion.q)
-          
-        est_yaw = estimage_yaw(yaw_euler[2], imu.GyroVals[2], dt)
+            # g_force = estimage_gravity([imu.AccelVals[0], imu.AccelVals[1], imu.AccelVals[2]], [imu.GyroVals[0], imu.GyroVals[1], imu.GyroVals[2]])
+            projected_vec = calculate_ned_frame([imu.MagVals[0], imu.MagVals[1], imu.MagVals[2]], [imu.AccelVals[0], imu.AccelVals[1], imu.AccelVals[2]])
+            yaw_quaternion = calculate_quaternion_from_coordinates([1,0,0], projected_vec[1], projected_vec[2])
+            yaw_euler = quaternion_to_euler(yaw_quaternion)
+            sensorfusion.updateRollAndPitch(imu.AccelVals[0], imu.AccelVals[1], imu.AccelVals[2], imu.GyroVals[0], imu.GyroVals[1], imu.GyroVals[2], dt)
+            comp_vel = speed_est.estimate_velocity(newTime, newTime-dt, imu.AccelVals[0], imu.AccelVals[1], imu.AccelVals[2], imu.GyroVals[0], imu.GyroVals[1], imu.GyroVals[2], sensorfusion.q)
+            est_yaw = estimage_yaw(yaw_euler[2], imu.GyroVals[2], dt)
+            
         quaternion_y = euler_to_quaternion(math.radians(sensorfusion.roll), math.radians(sensorfusion.pitch), math.radians(est_yaw))
 
         velo_msg = Twist()
         velo_msg.linear.x = comp_vel[0]
         velo_msg.linear.y = comp_vel[1]
         velo_msg.linear.z = comp_vel[2]
+        velo_msg.angular.x = imu.GyroVals[0]
+        velo_msg.angular.y = imu.GyroVals[1]
+        velo_msg.angular.z = imu.GyroVals[2]
         vel_pub.publish(velo_msg)
 
-        # Create IMU message
         imu_msg = Imu()
         imu_msg.header.stamp = rospy.Time.now()
         imu_msg.header.frame_id = 'imu_link'
@@ -279,12 +265,10 @@ def talker():
         # Publish the IMU message
         pub.publish(imu_msg)
 
-        # Broadcast the transform from 'odom' to 'imu_link'
         t = TransformStamped()
         t.header.stamp = imu_msg.header.stamp
         t.header.frame_id = 'odom'
         t.child_frame_id = 'imu_link'
-        # Assuming the IMU is mounted at the origin of the 'odom' frame (update if necessary)
         t.transform.translation.x = 0.0
         t.transform.translation.y = 0.0
         t.transform.translation.z = 0.0

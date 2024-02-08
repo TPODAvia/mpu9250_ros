@@ -1,3 +1,8 @@
 <launch>
-    <node name="mpu_node" pkg="mpu9250_ros" type="mpu_node.py" output="screen"/>
+
+    <arg name="calib_file" default="/home/jetson/catkin_ws/src/OrcaRL/sensors/mpu9250_ros/config/calib.json" doc="Path to the calibration file"/>
+
+    <node name="mpu_node" pkg="mpu9250_ros" type="mpu_node.py" output="screen"  args="$(arg calib_file)">
+    </node>
+
 </launch>
